@@ -1,6 +1,6 @@
 /**
- * Knight Bot - A WhatsApp Bot
- * Copyright (c) 2024 Professor
+ * Krishiran MD - A WhatsApp Bot
+ * Copyright (c) 2026 ASUNAX
  * 
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the MIT License.
@@ -73,7 +73,7 @@ setInterval(() => {
 let phoneNumber = "911234567890"
 let owner = JSON.parse(fs.readFileSync('./data/owner.json'))
 
-global.botname = "KNIGHT BOT"
+global.botname = "KRISHIRAN MD"
 global.themeemoji = "•"
 const pairingCode = !!phoneNumber || process.argv.includes("--pairing-code")
 const useMobile = process.argv.includes("--mobile")
@@ -264,13 +264,13 @@ async function startXeonBotInc() {
             try {
                 const botNumber = XeonBotInc.user.id.split(':')[0] + '@s.whatsapp.net';
                 await XeonBotInc.sendMessage(botNumber, {
-                    text: `🤖 Bot Connected Successfully!\n\n⏰ Time: ${new Date().toLocaleString()}\n✅ Status: Online and Ready!\n\n✅Make sure to join below channel`,
+                    text: `🤖 Krishiran MD Connected Successfully!\n\n⏰ Time: ${new Date().toLocaleString()}\n✅ Status: Online and Ready!\n\n✅Make sure to join below channel`,
                     contextInfo: {
                         forwardingScore: 1,
                         isForwarded: true,
                         forwardedNewsletterMessageInfo: {
                             newsletterJid: '120363161513685998@newsletter',
-                            newsletterName: 'KnightBot MD',
+                            newsletterName: 'Krishiran MD',
                             serverMessageId: -1
                         }
                     }
