@@ -1,49 +1,36 @@
 /**
- * Krishiran MD - Public WhatsApp Bot
- * Copyright (c) 2026 ASUNAX
- * MIT License
+ * Krishiran MD - WhatsApp Public Bot
+ * Author: ASUNAX
+ * License: MIT
  */
 
 require('./settings');
 const fs = require('fs');
 const chalk = require('chalk');
+const path = require('path');
 const pino = require('pino');
 const NodeCache = require("node-cache");
 const express = require('express');
-const crypto = require('crypto');
-const qrcode = require('qrcode');
 const { handleMessages, handleGroupParticipantUpdate, handleStatus } = require('./main');
-const { smsg, jidNormalizedUser } = require('./lib/myfunc');
+const { smsg } = require('./lib/myfunc');
 const store = require('./lib/lightweight_store');
 const settings = require('./settings');
-const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, jidDecode, makeCacheableSignalKeyStore, DisconnectReason, delay } = require("@whiskeysockets/baileys");
+const {
+    default: makeWASocket,
+    useMultiFileAuthState,
+    fetchLatestBaileysVersion,
+    jidNormalizedUser,
+    jidDecode,
+    makeCacheableSignalKeyStore,
+    DisconnectReason,
+    delay
+} = require("@whiskeysockets/baileys");
 
-// --------------------------- EXPRESS FRONTEND ---------------------------
-const app = express();
-app.use(express.static('public'));
-
-let latestQR = '';
-let referralCodes = {}; // { jid: code }
-
-function generateReferralCode() {
-    return crypto.randomBytes(3).toString('hex'); // 6 characters
-}
-
-app.get('/qr', (req, res) => res.json({ qr: latestQR }));
-app.get('/referral/:jid', (req, res) => {
-    const jid = req.params.jid;
-    if (!referralCodes[jid]) referralCodes[jid] = generateReferralCode();
-    res.json({ code: referralCodes[jid] });
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(chalk.green(`Frontend server running on port ${PORT}`)));
-
-// --------------------------- BOT ---------------------------
+// ---------- Initialize Store ----------
 store.readFromFile();
 setInterval(() => store.writeToFile(), settings.storeWriteInterval || 10000);
 
-// Garbage collection & RAM monitor
+// ---------- RAM & GC ----------
 if (global.gc) setInterval(() => global.gc(), 60_000);
 setInterval(() => {
     const used = process.memoryUsage().rss / 1024 / 1024;
@@ -53,14 +40,39 @@ setInterval(() => {
     }
 }, 30_000);
 
-// Start bot
+// ---------- Global ----------
+global.botname = "KRISHIRAN MD";
+global.themeemoji = "•";
+let qrCache = ""; // Store QR code base64 for frontend
+
+// ---------- Express Frontend ----------
+const app = express();
+const PORT = process.env.PORT || 3000;
+app.use(express.static('public'));
+
+// Endpoint for QR code
+app.get('/qr', (req, res) => {
+    if (!qrCache) return res.json({ qr: null });
+    res.json({ qr: qrCache });
+});
+
+// Endpoint for parrain code (Pairing Code)
+app.get('/paircode', async (req, res) => {
+    if (!global.lastPairingCode) return res.json({ code: null });
+    res.json({ code: global.lastPairingCode });
+});
+
+// Start server
+app.listen(PORT, () => console.log(`🌐 Frontend running at http://localhost:${PORT}`));
+
+// ---------- Start WhatsApp Bot ----------
 async function startKrishiranMD() {
     try {
-        const { version } = await fetchLatestBaileysVersion();
+        let { version } = await fetchLatestBaileysVersion();
         const { state, saveCreds } = await useMultiFileAuthState('./session');
         const msgRetryCounterCache = new NodeCache();
 
-        const bot = makeWASocket({
+        const XeonBotInc = makeWASocket({
             version,
             logger: pino({ level: 'silent' }),
             browser: ["Ubuntu", "Chrome", "20.0.0"],
@@ -75,46 +87,50 @@ async function startKrishiranMD() {
             keepAliveIntervalMs: 10000
         });
 
-        bot.ev.on('creds.update', saveCreds);
-        store.bind(bot.ev);
-        bot.public = true;
-        bot.serializeM = (m) => smsg(bot, m, store);
+        XeonBotInc.ev.on('creds.update', saveCreds);
+        store.bind(XeonBotInc.ev);
+        XeonBotInc.public = true;
+        XeonBotInc.serializeM = (m) => smsg(XeonBotInc, m, store);
 
-        // Messages
-        bot.ev.on('messages.upsert', async chatUpdate => {
+        // ---------- Messages ----------
+        XeonBotInc.ev.on('messages.upsert', async chatUpdate => {
             try {
                 const mek = chatUpdate.messages[0];
                 if (!mek.message) return;
                 mek.message = Object.keys(mek.message)[0] === 'ephemeralMessage' ? mek.message.ephemeralMessage.message : mek.message;
                 if (mek.key && mek.key.remoteJid === 'status@broadcast') {
-                    await handleStatus(bot, chatUpdate);
+                    await handleStatus(XeonBotInc, chatUpdate);
                     return;
                 }
-                try { await handleMessages(bot, chatUpdate, true); } catch (err) { console.error(err); }
-            } catch (err) { console.error(err); }
+                await handleMessages(XeonBotInc, chatUpdate, true);
+            } catch (err) {
+                console.error(err);
+            }
         });
 
-        // Group participants
-        bot.ev.on('group-participants.update', async update => {
-            await handleGroupParticipantUpdate(bot, update);
+        // ---------- Group Participants ----------
+        XeonBotInc.ev.on('group-participants.update', async (update) => {
+            await handleGroupParticipantUpdate(XeonBotInc, update);
         });
 
-        // Status updates
-        bot.ev.on('status.update', async status => {
-            await handleStatus(bot, status);
+        // ---------- Status Updates ----------
+        XeonBotInc.ev.on('status.update', async (status) => {
+            await handleStatus(XeonBotInc, status);
         });
 
-        // Connection updates
-        bot.ev.on('connection.update', async update => {
+        // ---------- Connection ----------
+        XeonBotInc.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect, qr } = update;
 
             if (qr) {
-                latestQR = await qrcode.toDataURL(qr);
-                console.log(chalk.yellow('📱 QR Code generated. Scan with WhatsApp.'));
+                // Save QR code for frontend
+                qrCache = qr;
+                global.lastPairingCode = qr; // Also available as "parrain code"
+                console.log(chalk.yellow('📱 QR Code generated, scan to connect.'));
             }
 
             if (connection === 'connecting') console.log(chalk.yellow('🔄 Connecting...'));
-            if (connection === 'open') console.log(chalk.green(`✅ Connected as ${bot.user?.id || 'UNKNOWN'}`));
+            if (connection === 'open') console.log(chalk.green(`✅ Connected as ${XeonBotInc.user?.id || 'UNKNOWN'}`));
 
             if (connection === 'close') {
                 const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
@@ -126,22 +142,22 @@ async function startKrishiranMD() {
             }
         });
 
-        return bot;
+        return XeonBotInc;
     } catch (err) {
-        console.error('Fatal error in startKrishiranMD:', err);
+        console.error('Fatal error:', err);
         await delay(5000);
         startKrishiranMD();
     }
 }
 
-// Start bot
+// ---------- Start Bot ----------
 startKrishiranMD().catch(console.error);
 
-// Global error handlers
+// ---------- Global Errors ----------
 process.on('uncaughtException', (err) => console.error('Uncaught Exception:', err));
 process.on('unhandledRejection', (err) => console.error('Unhandled Rejection:', err));
 
-// Hot reload
+// ---------- Hot Reload ----------
 let file = require.resolve(__filename);
 fs.watchFile(file, () => {
     fs.unwatchFile(file);
