@@ -1,9 +1,9 @@
 const settings = {
   packname: 'Krishiran MD',
-  author: 'Mr ASUNAX', // Optional, can leave empty
+  author: '‎',
   botName: "Krishiran MD",
-  botOwner: 'ASUNAX', 
-  ownerNumber: '18096351015', // Full international format (Dominican Republic)
+  botOwner: 'Mr ASUNAX', // Your name
+  ownerNumber: '8096353015', //Set your number here without + symbol, just add country code & number without any space
   giphyApiKey: 'qnl7ssQChTdPjsKta2Ax2LMaGXz303tq',
   commandMode: "public",
   maxStoreMessages: 20, 
