@@ -9,17 +9,21 @@ const fs = require('fs');
 const chalk = require('chalk');
 const pino = require('pino');
 const NodeCache = require("node-cache");
-const { handleMessages, handleGroupParticipantUpdate, handleStatus } = require('./main');
 const store = require('./lib/lightweight_store');
 const settings = require('./settings');
+const qrcode = require('qrcode');
+
+const { handleMessages, handleGroupParticipantUpdate, handleStatus } = require('./main');
 const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, jidNormalizedUser, makeCacheableSignalKeyStore, DisconnectReason, delay } = require("@whiskeysockets/baileys");
 
-// Initialize lightweight store
+// Initialize store
 store.readFromFile();
 setInterval(() => store.writeToFile(), settings.storeWriteInterval || 10000);
 
-// RAM & garbage collection
+// Garbage collection
 if (global.gc) setInterval(() => global.gc(), 60_000);
+
+// RAM monitor
 setInterval(() => {
     const used = process.memoryUsage().rss / 1024 / 1024;
     if (used > 400) {
@@ -28,7 +32,8 @@ setInterval(() => {
     }
 }, 30_000);
 
-// Start the bot
+global.botname = settings.botName || "KRISHIRAN MD";
+
 async function startKrishiranMD() {
     try {
         const { version } = await fetchLatestBaileysVersion();
@@ -38,7 +43,6 @@ async function startKrishiranMD() {
         const XeonBotInc = makeWASocket({
             version,
             logger: pino({ level: 'silent' }),
-            printQRInTerminal: true, // QR Code ap parèt pou tout itilizatè
             browser: ["Ubuntu", "Chrome", "20.0.0"],
             auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })) },
             markOnlineOnConnect: true,
@@ -53,11 +57,10 @@ async function startKrishiranMD() {
 
         XeonBotInc.ev.on('creds.update', saveCreds);
         store.bind(XeonBotInc.ev);
-
-        XeonBotInc.public = true; // Tout itilizatè ka voye lòd
+        XeonBotInc.public = true;
         XeonBotInc.serializeM = (m) => m;
 
-        // Messages
+        // Messages handler
         XeonBotInc.ev.on('messages.upsert', async chatUpdate => {
             try {
                 const mek = chatUpdate.messages[0];
@@ -80,10 +83,21 @@ async function startKrishiranMD() {
             await handleStatus(XeonBotInc, status);
         });
 
-        // Connection updates
+        // Connection update
         XeonBotInc.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect, qr } = update;
-            if (qr) console.log(chalk.yellow('📱 QR Code generated. Scan with WhatsApp to start using bot.'));
+
+            if (qr) {
+                // Convert QR to Base64 for frontend display
+                try {
+                    const qrDataURL = await qrcode.toDataURL(qr);
+                    console.log(chalk.yellow('📱 QR Code ready! Send this URL to frontend:'));
+                    console.log(qrDataURL);
+                } catch (err) {
+                    console.error('QR generation error:', err);
+                }
+            }
+
             if (connection === 'connecting') console.log(chalk.yellow('🔄 Connecting...'));
             if (connection === 'open') console.log(chalk.green(`✅ Bot connected successfully!`));
             if (connection === 'close') {
