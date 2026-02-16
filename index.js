@@ -1,6 +1,6 @@
 /**
  * Krishiran MD - Public WhatsApp Bot
- * Copyright (c) 2026
+ * Copyright (c) 2026 ASUNAX
  * MIT License
  */
 
@@ -9,21 +9,42 @@ const fs = require('fs');
 const chalk = require('chalk');
 const pino = require('pino');
 const NodeCache = require("node-cache");
+const express = require('express');
+const crypto = require('crypto');
+const qrcode = require('qrcode');
+const { handleMessages, handleGroupParticipantUpdate, handleStatus } = require('./main');
+const { smsg, jidNormalizedUser } = require('./lib/myfunc');
 const store = require('./lib/lightweight_store');
 const settings = require('./settings');
-const qrcode = require('qrcode');
+const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, jidDecode, makeCacheableSignalKeyStore, DisconnectReason, delay } = require("@whiskeysockets/baileys");
 
-const { handleMessages, handleGroupParticipantUpdate, handleStatus } = require('./main');
-const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, jidNormalizedUser, makeCacheableSignalKeyStore, DisconnectReason, delay } = require("@whiskeysockets/baileys");
+// --------------------------- EXPRESS FRONTEND ---------------------------
+const app = express();
+app.use(express.static('public'));
 
-// Initialize store
+let latestQR = '';
+let referralCodes = {}; // { jid: code }
+
+function generateReferralCode() {
+    return crypto.randomBytes(3).toString('hex'); // 6 characters
+}
+
+app.get('/qr', (req, res) => res.json({ qr: latestQR }));
+app.get('/referral/:jid', (req, res) => {
+    const jid = req.params.jid;
+    if (!referralCodes[jid]) referralCodes[jid] = generateReferralCode();
+    res.json({ code: referralCodes[jid] });
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(chalk.green(`Frontend server running on port ${PORT}`)));
+
+// --------------------------- BOT ---------------------------
 store.readFromFile();
 setInterval(() => store.writeToFile(), settings.storeWriteInterval || 10000);
 
-// Garbage collection
+// Garbage collection & RAM monitor
 if (global.gc) setInterval(() => global.gc(), 60_000);
-
-// RAM monitor
 setInterval(() => {
     const used = process.memoryUsage().rss / 1024 / 1024;
     if (used > 400) {
@@ -32,15 +53,14 @@ setInterval(() => {
     }
 }, 30_000);
 
-global.botname = settings.botName || "KRISHIRAN MD";
-
+// Start bot
 async function startKrishiranMD() {
     try {
         const { version } = await fetchLatestBaileysVersion();
         const { state, saveCreds } = await useMultiFileAuthState('./session');
         const msgRetryCounterCache = new NodeCache();
 
-        const XeonBotInc = makeWASocket({
+        const bot = makeWASocket({
             version,
             logger: pino({ level: 'silent' }),
             browser: ["Ubuntu", "Chrome", "20.0.0"],
@@ -55,53 +75,49 @@ async function startKrishiranMD() {
             keepAliveIntervalMs: 10000
         });
 
-        XeonBotInc.ev.on('creds.update', saveCreds);
-        store.bind(XeonBotInc.ev);
-        XeonBotInc.public = true;
-        XeonBotInc.serializeM = (m) => m;
+        bot.ev.on('creds.update', saveCreds);
+        store.bind(bot.ev);
+        bot.public = true;
+        bot.serializeM = (m) => smsg(bot, m, store);
 
-        // Messages handler
-        XeonBotInc.ev.on('messages.upsert', async chatUpdate => {
+        // Messages
+        bot.ev.on('messages.upsert', async chatUpdate => {
             try {
                 const mek = chatUpdate.messages[0];
                 if (!mek.message) return;
+                mek.message = Object.keys(mek.message)[0] === 'ephemeralMessage' ? mek.message.ephemeralMessage.message : mek.message;
                 if (mek.key && mek.key.remoteJid === 'status@broadcast') {
-                    await handleStatus(XeonBotInc, chatUpdate);
+                    await handleStatus(bot, chatUpdate);
                     return;
                 }
-                await handleMessages(XeonBotInc, chatUpdate, true);
+                try { await handleMessages(bot, chatUpdate, true); } catch (err) { console.error(err); }
             } catch (err) { console.error(err); }
         });
 
         // Group participants
-        XeonBotInc.ev.on('group-participants.update', async (update) => {
-            await handleGroupParticipantUpdate(XeonBotInc, update);
+        bot.ev.on('group-participants.update', async update => {
+            await handleGroupParticipantUpdate(bot, update);
         });
 
         // Status updates
-        XeonBotInc.ev.on('status.update', async (status) => {
-            await handleStatus(XeonBotInc, status);
+        bot.ev.on('status.update', async status => {
+            await handleStatus(bot, status);
         });
 
-        // Connection update
-        XeonBotInc.ev.on('connection.update', async (update) => {
+        // Connection updates
+        bot.ev.on('connection.update', async update => {
             const { connection, lastDisconnect, qr } = update;
 
             if (qr) {
-                // Convert QR to Base64 for frontend display
-                try {
-                    const qrDataURL = await qrcode.toDataURL(qr);
-                    console.log(chalk.yellow('📱 QR Code ready! Send this URL to frontend:'));
-                    console.log(qrDataURL);
-                } catch (err) {
-                    console.error('QR generation error:', err);
-                }
+                latestQR = await qrcode.toDataURL(qr);
+                console.log(chalk.yellow('📱 QR Code generated. Scan with WhatsApp.'));
             }
 
             if (connection === 'connecting') console.log(chalk.yellow('🔄 Connecting...'));
-            if (connection === 'open') console.log(chalk.green(`✅ Bot connected successfully!`));
+            if (connection === 'open') console.log(chalk.green(`✅ Connected as ${bot.user?.id || 'UNKNOWN'}`));
+
             if (connection === 'close') {
-                const shouldReconnect = (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut);
+                const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
                 if (shouldReconnect) {
                     console.log(chalk.yellow('Reconnecting...'));
                     await delay(5000);
@@ -110,9 +126,9 @@ async function startKrishiranMD() {
             }
         });
 
-        return XeonBotInc;
+        return bot;
     } catch (err) {
-        console.error('Fatal error:', err);
+        console.error('Fatal error in startKrishiranMD:', err);
         await delay(5000);
         startKrishiranMD();
     }
